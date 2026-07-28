@@ -116,18 +116,29 @@ def load_locations(file_id: str):
         return pd.DataFrame(columns=COLUMNS), {}
 
     ws = wb[LOCATIONS_SHEET]
-    df = pd.read_excel(io.BytesIO(data), sheet_name=LOCATIONS_SHEET)
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-    df = df[COLUMNS]
+    n = len(COLUMNS)
+    # Leest rechtstreeks via openpyxl i.p.v. pandas' header-gebaseerde inlezen: robuust
+    # tegen een sheet waarvan de header-rij per ongeluk verdwenen/beschadigd is (bv. door
+    # Google Sheets dat zijn eigen versie terugschrijft over een open bestand).
+    eerste_rij = [ws.cell(row=1, column=c + 1).value for c in range(n)]
+    heeft_header = eerste_rij == COLUMNS
+    eerste_datarij = 2 if heeft_header else 1
+
+    records = []
+    sheet_rij_naar_index = {}
+    for sheet_rij in range(eerste_datarij, ws.max_row + 1):
+        values = [ws.cell(row=sheet_rij, column=c + 1).value for c in range(n)]
+        if all(v is None for v in values):
+            continue
+        sheet_rij_naar_index[sheet_rij] = len(records)
+        records.append(dict(zip(COLUMNS, values)))
+    df = pd.DataFrame(records, columns=COLUMNS)
 
     row_photos = {}
     for xl_image in ws._images:
-        sheet_row = xl_image.anchor._from.row + 1  # 0-indexed -> 1-indexed
-        df_index = sheet_row - 2  # rij 1 = header, rij 2 = df-index 0
-        if df_index >= 0:
-            row_photos[df_index] = image_bytes(xl_image)
+        sheet_rij = xl_image.anchor._from.row + 1  # 0-indexed -> 1-indexed
+        if sheet_rij in sheet_rij_naar_index:
+            row_photos[sheet_rij_naar_index[sheet_rij]] = image_bytes(xl_image)
     return df, row_photos
 
 
