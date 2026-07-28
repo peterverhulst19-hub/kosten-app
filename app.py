@@ -114,9 +114,19 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+
+
 def download_workbook_bytes(file_id: str) -> bytes:
     service = get_drive_service()
-    request = service.files().get_media(fileId=file_id)
+    meta = service.files().get(fileId=file_id, fields="mimeType").execute()
+    if meta["mimeType"] == GOOGLE_SHEETS_MIME:
+        # Native Google Sheet (aangemaakt via "Nieuw -> Google Spreadsheets"):
+        # moet geëxporteerd worden als xlsx, kan niet rechtstreeks gedownload worden.
+        request = service.files().export_media(fileId=file_id, mimeType=XLSX_MIME)
+    else:
+        # Een echt geüpload .xlsx-bestand.
+        request = service.files().get_media(fileId=file_id)
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)
     done = False
