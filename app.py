@@ -192,7 +192,11 @@ if map_click and map_click.get("last_clicked"):
     st.session_state.lat = map_click["last_clicked"]["lat"]
     st.session_state.lon = map_click["last_clicked"]["lng"]
 
-st.caption(f"Geselecteerde locatie: {st.session_state.lat:.5f}, {st.session_state.lon:.5f}")
+picker_maps_url = f"https://www.google.com/maps?q={st.session_state.lat},{st.session_state.lon}"
+st.caption(
+    f"Geselecteerde locatie: {st.session_state.lat:.5f}, {st.session_state.lon:.5f} — "
+    f"[📍 Bekijk in Google Maps]({picker_maps_url})"
+)
 
 with st.form("nieuwe_locatie", clear_on_submit=True):
     naam = st.text_input("Naam")
@@ -248,12 +252,17 @@ else:
         )
         gefilterd = locaties[mask]
 
-    if not gefilterd.empty:
+    gefilterd_geo = gefilterd.dropna(subset=["Latitude", "Longitude"])
+    ontbrekend = len(gefilterd) - len(gefilterd_geo)
+    if ontbrekend:
+        st.warning(f"{ontbrekend} locatie(s) hebben geen geldige coördinaten en worden niet op de kaart getoond.")
+
+    if not gefilterd_geo.empty:
         overview_map = folium.Map(
-            location=[gefilterd["Latitude"].mean(), gefilterd["Longitude"].mean()],
+            location=[gefilterd_geo["Latitude"].mean(), gefilterd_geo["Longitude"].mean()],
             zoom_start=7,
         )
-        for _, r in gefilterd.iterrows():
+        for _, r in gefilterd_geo.iterrows():
             folium.Marker(
                 [r["Latitude"], r["Longitude"]],
                 popup=f"{r['Naam']} ({r['Datum']})",
@@ -270,5 +279,6 @@ else:
                 st.markdown(f"**{r['Naam']}** — {r['Datum']}")
                 if r.get("Notities"):
                     st.write(r["Notities"])
-                maps_url = f"https://www.google.com/maps?q={r['Latitude']},{r['Longitude']}"
-                st.markdown(f"[📍 Open in Google Maps]({maps_url})")
+                if pd.notna(r["Latitude"]) and pd.notna(r["Longitude"]):
+                    maps_url = f"https://www.google.com/maps?q={r['Latitude']},{r['Longitude']}"
+                    st.markdown(f"[📍 Open in Google Maps]({maps_url})")
