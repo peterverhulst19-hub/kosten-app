@@ -49,7 +49,7 @@ def image_bytes(xl_image) -> bytes:
 def get_drive_service():
     info = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/drive.file"]
+        info, scopes=["https://www.googleapis.com/auth/drive"]
     )
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
