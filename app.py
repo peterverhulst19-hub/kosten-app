@@ -173,9 +173,17 @@ if "lat" not in st.session_state:
     st.session_state.lon = DEFAULT_LON
 
 geoloc = get_geolocation()
-if geoloc and st.button("📍 Gebruik mijn huidige locatie"):
-    st.session_state.lat = geoloc["coords"]["latitude"]
-    st.session_state.lon = geoloc["coords"]["longitude"]
+if st.button("📍 Gebruik mijn huidige locatie"):
+    if geoloc and "coords" in geoloc:
+        st.session_state.lat = geoloc["coords"]["latitude"]
+        st.session_state.lon = geoloc["coords"]["longitude"]
+    elif geoloc and "error" in geoloc:
+        st.warning(
+            f"Kon je locatie niet ophalen: {geoloc['error'].get('message', 'onbekende fout')}. "
+            "Geef de browser toestemming voor locatietoegang en probeer opnieuw."
+        )
+    else:
+        st.warning("Nog geen locatie beschikbaar, probeer het nog eens.")
 
 picker_map = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
 folium.Marker([st.session_state.lat, st.session_state.lon]).add_to(picker_map)
