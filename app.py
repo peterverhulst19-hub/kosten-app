@@ -175,6 +175,19 @@ def save_expense(file_id: str, row: dict, maand_index: int) -> list:
 
 st.set_page_config(page_title="Kosten invoer", page_icon="\U0001F4B0")
 
+# --- Configuratie-check: geeft een duidelijke melding i.p.v. een kale
+# "Internal server error" zolang niet alle secrets zijn ingevuld. ---
+REQUIRED_SECRETS = ["auth", "gcp_service_account", "drive_file_id"]
+missing_secrets = [key for key in REQUIRED_SECRETS if key not in st.secrets]
+if missing_secrets:
+    st.title("Kosten invoer")
+    st.error(
+        "De app is nog niet volledig geconfigureerd. Ontbrekende secrets: "
+        + ", ".join(missing_secrets)
+        + ". Voeg deze toe via Settings → Secrets op Streamlit Cloud."
+    )
+    st.stop()
+
 # --- Login (enkel toegankelijk voor jezelf) ---
 if not st.user.is_logged_in:
     st.title("Kosten invoer")
