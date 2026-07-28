@@ -1,103 +1,43 @@
 import io
 from datetime import date
 
+import folium
 import openpyxl
 import pandas as pd
 import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from openpyxl.drawing.image import Image as XLImage
+from PIL import Image as PILImage
+from streamlit_folium import st_folium
+from streamlit_js_eval import get_geolocation
 
-TRANSACTIONS_SHEET = "Transacties"
-COLUMNS = ["Datum", "Jaar", "Maand", "Categorie", "Subcategorie", "Bedrag", "Omschrijving"]
+LOCATIONS_SHEET = "Locaties"
+COLUMNS = ["Datum", "Naam", "Notities", "Latitude", "Longitude"]
+PHOTO_COLUMN = "F"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
-DUTCH_MONTHS = [
-    "Januari", "Februari", "Maart", "April", "Mei", "Juni",
-    "Juli", "Augustus", "September", "Oktober", "November", "December",
-]
-
-# Best-effort mapping detected from the example workbook. Adjust freely if it
-# doesn't match how you actually want expenses grouped.
-CATEGORY_MAP = {
-    "Voeding": ["Voeding winkel", "Uit eten"],
-    "Vaste kosten": [
-        "Leningen en verzekeringen", "Sparen", "Internet en tv",
-        "Nutsvoorzieningen", "Apotheek en dokter", "Kinderen school",
-    ],
-    "Niet vaste kosten": [
-        "Kleding en accessoires", "Woning en tuin", "Huisdieren", "Hobbies",
-        "Kinderen buitenschoolse activiteiten", "Kinderen speelgoed en feesten",
-        "Vakantie", "Feesten en gelegenheden",
-    ],
-    "Vervoer": ["Vervoer"],
-}
-
-# --- Mapping onto the per-year "Vaste kosten {jaar}" sheet layout ---
-# Derived from inspecting the example workbook's month-block grid (12 blocks of
-# 3 columns each, starting at column A). Adjust here if the real sheet differs.
-YEAR_SHEET_TEMPLATE = "Vaste kosten {jaar}"
-GRAND_TOTAL_ROW = 4
-TOP_LEVEL_ROW = {"Voeding": 5, "Vaste kosten": 6, "Niet vaste kosten": 7, "Vervoer": 8}
-
-# subcategorie -> (eerste data-rij, laatste data-rij) binnen het blok onder het label
-# "Voeding winkel" en "Uit eten" hebben in de template geen eigen invoerrijen; voor
-# hen wordt enkel de hoofdcategorie-totaal bijgewerkt.
-SUBCATEGORY_BLOCKS = {
-    "Leningen en verzekeringen": (12, 17),
-    "Sparen": (19, 21),
-    "Internet en tv": (23, 26),
-    "Nutsvoorzieningen": (28, 30),
-    "Apotheek en dokter": (32, 39),
-    "Kinderen school": (50, 57),
-    "Vervoer": (59, 65),
-    "Woning en tuin": (69, 78),
-    "Kleding en accessoires": (80, 82),
-    "Huisdieren": (84, 86),
-    "Hobbies": (88, 92),
-    "Kinderen buitenschoolse activiteiten": (94, 98),
-    "Kinderen speelgoed en feesten": (100, 103),
-    "Vakantie": (105, 120),
-    "Feesten en gelegenheden": (122, 131),
-}
+# Antwerpen, gebruikt als startpunt zolang er nog geen locatie gekozen is.
+DEFAULT_LAT, DEFAULT_LON = 51.2194, 4.4025
 
 
-def month_base_column(maand_index: int) -> int:
-    return 1 + 3 * maand_index
+def compress_photo(data: bytes, max_size: int = 1024, quality: int = 75) -> bytes:
+    img = PILImage.open(io.BytesIO(data)).convert("RGB")
+    img.thumbnail((max_size, max_size))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=quality)
+    return out.getvalue()
 
 
-def update_year_sheet(wb, jaar: int, maand_index: int, hoofdcategorie: str,
-                       subcategorie: str, bedrag: float, omschrijving: str) -> list:
-    warnings = []
-    sheet_name = YEAR_SHEET_TEMPLATE.format(jaar=jaar)
-    if sheet_name not in wb.sheetnames:
-        warnings.append(f"Sheet '{sheet_name}' niet gevonden, enkel toegevoegd aan {TRANSACTIONS_SHEET}.")
-        return warnings
-
-    ws = wb[sheet_name]
-    base_col = month_base_column(maand_index)
-    amount_col = base_col + 1
-
-    for row in (GRAND_TOTAL_ROW, TOP_LEVEL_ROW[hoofdcategorie]):
-        cell = ws.cell(row=row, column=amount_col)
-        cell.value = (cell.value or 0) + bedrag
-
-    block = SUBCATEGORY_BLOCKS.get(subcategorie)
-    if block is None:
-        return warnings
-
-    first_row, last_row = block
-    for r in range(first_row, last_row + 1):
-        if ws.cell(row=r, column=amount_col).value in (None, ""):
-            ws.cell(row=r, column=amount_col).value = bedrag
-            ws.cell(row=r, column=amount_col + 1).value = omschrijving
-            break
-    else:
-        warnings.append(
-            f"Geen vrije rij meer in het blok '{subcategorie}' van '{sheet_name}' "
-            f"(totalen zijn wel bijgewerkt)."
-        )
-    return warnings
+def image_bytes(xl_image) -> bytes:
+    try:
+        return xl_image._data()
+    except Exception:
+        buf = io.BytesIO()
+        xl_image.ref.save(buf, format="PNG")
+        return buf.getvalue()
 
 
 # --- Google Drive opslag ---
@@ -112,9 +52,6 @@ def get_drive_service():
         info, scopes=["https://www.googleapis.com/auth/drive.file"]
     )
     return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-
-GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
 
 def download_workbook_bytes(file_id: str) -> bytes:
@@ -141,56 +78,67 @@ def upload_workbook_bytes(file_id: str, data: bytes) -> None:
     service.files().update(fileId=file_id, media_body=media).execute()
 
 
-def load_transactions(file_id: str) -> pd.DataFrame:
-    try:
-        data = download_workbook_bytes(file_id)
-    except Exception as exc:
-        st.error(f"Kon bestand niet ophalen van Google Drive: {exc}")
-        return pd.DataFrame(columns=COLUMNS)
-
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
-    sheet_names = wb.sheetnames
-    wb.close()
-    if TRANSACTIONS_SHEET not in sheet_names:
-        return pd.DataFrame(columns=COLUMNS)
-
-    df = pd.read_excel(io.BytesIO(data), sheet_name=TRANSACTIONS_SHEET)
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-    return df[COLUMNS]
-
-
-def save_expense(file_id: str, row: dict, maand_index: int) -> list:
+def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
     data = download_workbook_bytes(file_id)
-    wb = openpyxl.load_workbook(io.BytesIO(data))
+    wb = openpyxl.load_workbook(io.BytesIO(data))  # niet read_only: nodig om afbeeldingen toe te voegen
 
-    if TRANSACTIONS_SHEET not in wb.sheetnames:
-        ws = wb.create_sheet(TRANSACTIONS_SHEET)
+    if LOCATIONS_SHEET not in wb.sheetnames:
+        ws = wb.create_sheet(LOCATIONS_SHEET)
         ws.append(COLUMNS)
     else:
-        ws = wb[TRANSACTIONS_SHEET]
+        ws = wb[LOCATIONS_SHEET]
     ws.append([row[col] for col in COLUMNS])
+    row_num = ws.max_row
 
-    warnings = update_year_sheet(
-        wb, row["Jaar"], maand_index, row["Categorie"], row["Subcategorie"],
-        row["Bedrag"], row["Omschrijving"],
-    )
+    if photo_bytes:
+        pil_img = PILImage.open(io.BytesIO(photo_bytes))
+        target_width = 160
+        target_height = int(pil_img.height * (target_width / pil_img.width))
+        xl_image = XLImage(io.BytesIO(photo_bytes))
+        xl_image.width, xl_image.height = target_width, target_height
+        ws.add_image(xl_image, f"{PHOTO_COLUMN}{row_num}")
+        ws.row_dimensions[row_num].height = target_height * 0.75  # px -> punten
 
     out = io.BytesIO()
     wb.save(out)
     upload_workbook_bytes(file_id, out.getvalue())
-    return warnings
 
 
-st.set_page_config(page_title="Kosten invoer", page_icon="\U0001F4B0")
+def load_locations(file_id: str):
+    try:
+        data = download_workbook_bytes(file_id)
+    except Exception as exc:
+        st.error(f"Kon bestand niet ophalen van Google Drive: {exc}")
+        return pd.DataFrame(columns=COLUMNS), {}
+
+    wb = openpyxl.load_workbook(io.BytesIO(data))  # niet read_only: nodig om afbeeldingen te lezen
+    if LOCATIONS_SHEET not in wb.sheetnames:
+        return pd.DataFrame(columns=COLUMNS), {}
+
+    ws = wb[LOCATIONS_SHEET]
+    df = pd.read_excel(io.BytesIO(data), sheet_name=LOCATIONS_SHEET)
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    df = df[COLUMNS]
+
+    row_photos = {}
+    for xl_image in ws._images:
+        sheet_row = xl_image.anchor._from.row + 1  # 0-indexed -> 1-indexed
+        df_index = sheet_row - 2  # rij 1 = header, rij 2 = df-index 0
+        if df_index >= 0:
+            row_photos[df_index] = image_bytes(xl_image)
+    return df, row_photos
+
+
+st.set_page_config(page_title="Leuke locaties", page_icon="\U0001F4CD")
 
 # --- Configuratie-check: geeft een duidelijke melding i.p.v. een kale
 # "Internal server error" zolang niet alle secrets zijn ingevuld. ---
 REQUIRED_SECRETS = ["auth", "gcp_service_account", "drive_file_id"]
 missing_secrets = [key for key in REQUIRED_SECRETS if key not in st.secrets]
 if missing_secrets:
-    st.title("Kosten invoer")
+    st.title("Leuke locaties")
     st.error(
         "De app is nog niet volledig geconfigureerd. Ontbrekende secrets: "
         + ", ".join(missing_secrets)
@@ -200,8 +148,8 @@ if missing_secrets:
 
 # --- Login (enkel toegankelijk voor jezelf) ---
 if not st.user.is_logged_in:
-    st.title("Kosten invoer")
-    st.write("Log in met Google om je kosten te beheren.")
+    st.title("Leuke locaties")
+    st.write("Log in met Google om je locaties te beheren.")
     st.button("Inloggen met Google", on_click=st.login)
     st.stop()
 
@@ -213,77 +161,106 @@ if allowed_emails and st.user.email not in allowed_emails:
 
 FILE_ID = st.secrets["drive_file_id"]
 
-st.title("Kosten invoer")
+st.title("Leuke locaties")
 with st.sidebar:
     st.caption(f"Ingelogd als {st.user.email}")
     st.button("Uitloggen", on_click=st.logout)
 
-hoofdcategorie = st.selectbox("Hoofdcategorie", list(CATEGORY_MAP.keys()))
+st.subheader("Nieuwe locatie toevoegen")
 
-with st.form("nieuwe_kost", clear_on_submit=True):
-    col1, col2 = st.columns(2)
-    with col1:
-        datum = st.date_input("Datum", value=date.today())
-        subcategorieen = CATEGORY_MAP[hoofdcategorie]
-        subcategorie = st.selectbox("Subcategorie", subcategorieen) if subcategorieen else ""
-    with col2:
-        bedrag = st.number_input("Bedrag (EUR)", min_value=0.0, step=0.5, format="%.2f")
-        omschrijving = st.text_input("Omschrijving (optioneel)")
+if "lat" not in st.session_state:
+    st.session_state.lat = DEFAULT_LAT
+    st.session_state.lon = DEFAULT_LON
+
+geoloc = get_geolocation()
+if geoloc and st.button("📍 Gebruik mijn huidige locatie"):
+    st.session_state.lat = geoloc["coords"]["latitude"]
+    st.session_state.lon = geoloc["coords"]["longitude"]
+
+picker_map = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+folium.Marker([st.session_state.lat, st.session_state.lon]).add_to(picker_map)
+map_click = st_folium(picker_map, height=350, use_container_width=True, key="location_picker")
+if map_click and map_click.get("last_clicked"):
+    st.session_state.lat = map_click["last_clicked"]["lat"]
+    st.session_state.lon = map_click["last_clicked"]["lng"]
+
+st.caption(f"Geselecteerde locatie: {st.session_state.lat:.5f}, {st.session_state.lon:.5f}")
+
+with st.form("nieuwe_locatie", clear_on_submit=True):
+    naam = st.text_input("Naam")
+    notities = st.text_area("Notities (optioneel)")
+    datum = st.date_input("Datum", value=date.today())
+
+    foto_modus = st.radio("Foto", ["Geen", "Nemen", "Kiezen"], horizontal=True)
+    foto_ruw = None
+    if foto_modus == "Nemen":
+        camera_bestand = st.camera_input("Neem een foto")
+        if camera_bestand:
+            foto_ruw = camera_bestand.getvalue()
+    elif foto_modus == "Kiezen":
+        upload_bestand = st.file_uploader("Kies een foto", type=["jpg", "jpeg", "png"])
+        if upload_bestand:
+            foto_ruw = upload_bestand.getvalue()
+
     submitted = st.form_submit_button("Toevoegen")
 
     if submitted:
-        if bedrag <= 0:
-            st.error("Vul een bedrag groter dan 0 in.")
+        if not naam:
+            st.error("Vul een naam in.")
         else:
             row = {
                 "Datum": datum,
-                "Jaar": datum.year,
-                "Maand": DUTCH_MONTHS[datum.month - 1],
-                "Categorie": hoofdcategorie,
-                "Subcategorie": subcategorie,
-                "Bedrag": bedrag,
-                "Omschrijving": omschrijving,
+                "Naam": naam,
+                "Notities": notities,
+                "Latitude": st.session_state.lat,
+                "Longitude": st.session_state.lon,
             }
+            foto_bytes = compress_photo(foto_ruw) if foto_ruw else None
             try:
-                warnings = save_expense(FILE_ID, row, datum.month - 1)
+                save_location(FILE_ID, row, foto_bytes)
             except Exception as exc:
                 st.error(f"Kon niet opslaan naar Google Drive: {exc}")
             else:
-                st.success(f"Toegevoegd: {hoofdcategorie} / {subcategorie or '-'} - EUR {bedrag:.2f}")
-                for warning in warnings:
-                    st.warning(warning)
+                st.success(f"'{naam}' toegevoegd!")
 
 st.divider()
 st.subheader("Overzicht")
 
-transacties = load_transactions(FILE_ID)
+locaties, row_photos = load_locations(FILE_ID)
 
-if transacties.empty:
-    st.info("Nog geen kosten ingevoerd.")
+if locaties.empty:
+    st.info("Nog geen locaties toegevoegd.")
 else:
-    jaren = sorted(transacties["Jaar"].dropna().unique(), reverse=True)
-    jaar = st.selectbox("Jaar", jaren)
-    categorieen = st.multiselect(
-        "Categorie filter", sorted(transacties["Categorie"].dropna().unique())
-    )
-
-    gefilterd = transacties[transacties["Jaar"] == jaar]
-    if categorieen:
-        gefilterd = gefilterd[gefilterd["Categorie"].isin(categorieen)]
-
-    st.dataframe(
-        gefilterd.sort_values("Datum", ascending=False),
-        use_container_width=True,
-        hide_index=True,
-    )
+    zoek = st.text_input("Zoeken", placeholder="Naam of notities...")
+    gefilterd = locaties
+    if zoek:
+        mask = (
+            locaties["Naam"].str.contains(zoek, case=False, na=False)
+            | locaties["Notities"].str.contains(zoek, case=False, na=False)
+        )
+        gefilterd = locaties[mask]
 
     if not gefilterd.empty:
-        st.subheader(f"Samenvatting {jaar}")
-        pivot = pd.pivot_table(
-            gefilterd, index="Maand", columns="Categorie", values="Bedrag",
-            aggfunc="sum", fill_value=0,
-        ).reindex(DUTCH_MONTHS).dropna(how="all")
-        st.dataframe(pivot, use_container_width=True)
+        overview_map = folium.Map(
+            location=[gefilterd["Latitude"].mean(), gefilterd["Longitude"].mean()],
+            zoom_start=7,
+        )
+        for _, r in gefilterd.iterrows():
+            folium.Marker(
+                [r["Latitude"], r["Longitude"]],
+                popup=f"{r['Naam']} ({r['Datum']})",
+            ).add_to(overview_map)
+        st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
 
-        per_categorie = gefilterd.groupby("Categorie")["Bedrag"].sum()
-        st.bar_chart(per_categorie)
+    for idx, r in gefilterd.sort_values("Datum", ascending=False).iterrows():
+        with st.container(border=True):
+            cols = st.columns([1, 2])
+            with cols[0]:
+                if idx in row_photos:
+                    st.image(row_photos[idx])
+            with cols[1]:
+                st.markdown(f"**{r['Naam']}** — {r['Datum']}")
+                if r.get("Notities"):
+                    st.write(r["Notities"])
+                maps_url = f"https://www.google.com/maps?q={r['Latitude']},{r['Longitude']}"
+                st.markdown(f"[📍 Open in Google Maps]({maps_url})")

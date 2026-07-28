@@ -5,3 +5,7 @@ google-api-python-client
 google-auth
 Authlib
 httpx
+streamlit-folium
+folium
+streamlit-js-eval
+Pillow
