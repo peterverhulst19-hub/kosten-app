@@ -1,3 +1,4 @@
+import html
 import io
 import time
 from datetime import date
@@ -714,25 +715,55 @@ else:
             )
             gefilterd = locaties[mask]
 
-        gefilterd_geo = gefilterd.dropna(subset=["Latitude", "Longitude"])
-        ontbrekend = len(gefilterd) - len(gefilterd_geo)
-        if ontbrekend:
-            st.warning(f"{ontbrekend} locatie(s) hebben geen geldige coördinaten en worden niet op de kaart getoond.")
+        def build_popup_html(r) -> str:
+            naam = html.escape(str(r["Naam"]))
+            datum = html.escape(str(r["Datum"]))
+            notities_html = ""
+            if r.get("Notities"):
+                notities_html = (
+                    f'<div style="color:#333;font-size:13px;margin-top:4px;">'
+                    f'{html.escape(str(r["Notities"]))}</div>'
+                )
+            return f"""
+            <div style="font-family:-apple-system,'Segoe UI',sans-serif;min-width:170px;">
+                <div style="background:linear-gradient(135deg,#0b3d63 0%,#14919b 60%,#45c2b3 100%);
+                            color:#fff;padding:8px 12px;border-radius:8px 8px 0 0;
+                            font-weight:700;font-size:14px;">
+                    {type_icon(r["Type"])} {naam}
+                </div>
+                <div style="background:#fff;padding:8px 12px;border-radius:0 0 8px 8px;">
+                    <div style="color:#0b3d63;font-size:12px;font-weight:600;">{datum}</div>
+                    {notities_html}
+                </div>
+            </div>
+            """
 
-        if not gefilterd_geo.empty:
-            overview_map = folium.Map(
-                location=[gefilterd_geo["Latitude"].mean(), gefilterd_geo["Longitude"].mean()],
+        def render_type_map(subset_df, map_key: str):
+            subset_geo = subset_df.dropna(subset=["Latitude", "Longitude"])
+            ontbrekend = len(subset_df) - len(subset_geo)
+            if ontbrekend:
+                st.warning(
+                    f"{ontbrekend} locatie(s) hebben geen geldige coördinaten en worden niet op de kaart getoond."
+                )
+            if subset_geo.empty:
+                return
+            kaart = folium.Map(
+                location=[subset_geo["Latitude"].mean(), subset_geo["Longitude"].mean()],
                 zoom_start=7,
             )
-            for _, r in gefilterd_geo.iterrows():
+            for _, r in subset_geo.iterrows():
                 folium.Marker(
                     [r["Latitude"], r["Longitude"]],
-                    popup=f"{type_icon(r['Type'])} {r['Naam']} ({r['Datum']})",
+                    popup=folium.Popup(build_popup_html(r), max_width=250),
                     icon=folium.DivIcon(
-                        html=f'<div style="font-size: 24px; transform: translate(-50%, -50%);">{type_icon(r["Type"])}</div>'
+                        html=(
+                            '<div style="font-size:24px;transform:translate(-50%,-50%);'
+                            'filter:drop-shadow(0 2px 3px rgba(0,0,0,0.35));">'
+                            f'{type_icon(r["Type"])}</div>'
+                        )
                     ),
-                ).add_to(overview_map)
-            st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
+                ).add_to(kaart)
+            st_folium(kaart, height=350, use_container_width=True, key=map_key)
 
     FOTO_BREEDTE = 120  # klein houden i.p.v. de volledige kolombreedte
 
@@ -835,9 +866,10 @@ else:
     for tab, type_filter in zip(tabs, [None] + LOCATION_TYPES):
         with tab:
             subset = gefilterd if type_filter is None else gefilterd[gefilterd["Type"] == type_filter]
+            tab_key = type_filter or "alle"
             if subset.empty:
                 st.caption("Geen locaties in deze categorie.")
                 continue
-            tab_key = type_filter or "alle"
+            render_type_map(subset, f"map_{tab_key}")
             for idx, r in subset.sort_values("Datum", ascending=False).iterrows():
                 render_location_card(idx, r, tab_key)
