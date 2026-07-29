@@ -101,6 +101,43 @@ def upload_workbook_bytes(file_id: str, data: bytes) -> None:
     _with_retries(_do)
 
 
+def _embed_photo(ws, row_num: int, photo_bytes: bytes) -> None:
+    pil_img = PILImage.open(io.BytesIO(photo_bytes))
+    target_width = 160
+    target_height = int(pil_img.height * (target_width / pil_img.width))
+    xl_image = XLImage(io.BytesIO(photo_bytes))
+    xl_image.width, xl_image.height = target_width, target_height
+    ws.add_image(xl_image, f"{PHOTO_COLUMN}{row_num}")
+    ws.row_dimensions[row_num].height = target_height * 0.75  # px -> punten
+
+
+def _read_locations_sheet(ws):
+    # Leest rechtstreeks via openpyxl i.p.v. pandas' header-gebaseerde inlezen: robuust
+    # tegen een sheet waarvan de header-rij per ongeluk verdwenen/beschadigd is (bv. door
+    # Google Sheets dat zijn eigen versie terugschrijft over een open bestand).
+    n = len(COLUMNS)
+    eerste_rij = [ws.cell(row=1, column=c + 1).value for c in range(n)]
+    heeft_header = eerste_rij == COLUMNS
+    eerste_datarij = 2 if heeft_header else 1
+
+    records = []
+    sheet_rij_naar_index = {}
+    for sheet_rij in range(eerste_datarij, ws.max_row + 1):
+        values = [ws.cell(row=sheet_rij, column=c + 1).value for c in range(n)]
+        if all(v is None for v in values):
+            continue
+        sheet_rij_naar_index[sheet_rij] = len(records)
+        records.append(dict(zip(COLUMNS, values)))
+
+    photos_by_index = {}
+    for xl_image in ws._images:
+        sheet_rij = xl_image.anchor._from.row + 1  # 0-indexed -> 1-indexed
+        if sheet_rij in sheet_rij_naar_index:
+            photos_by_index[sheet_rij_naar_index[sheet_rij]] = image_bytes(xl_image)
+
+    return records, photos_by_index
+
+
 def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
     data = download_workbook_bytes(file_id)
     wb = openpyxl.load_workbook(io.BytesIO(data))  # niet read_only: nodig om afbeeldingen toe te voegen
@@ -114,13 +151,34 @@ def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
     row_num = ws.max_row
 
     if photo_bytes:
-        pil_img = PILImage.open(io.BytesIO(photo_bytes))
-        target_width = 160
-        target_height = int(pil_img.height * (target_width / pil_img.width))
-        xl_image = XLImage(io.BytesIO(photo_bytes))
-        xl_image.width, xl_image.height = target_width, target_height
-        ws.add_image(xl_image, f"{PHOTO_COLUMN}{row_num}")
-        ws.row_dimensions[row_num].height = target_height * 0.75  # px -> punten
+        _embed_photo(ws, row_num, photo_bytes)
+
+    out = io.BytesIO()
+    wb.save(out)
+    upload_workbook_bytes(file_id, out.getvalue())
+
+
+def delete_location(file_id: str, index_to_delete: int) -> None:
+    data = download_workbook_bytes(file_id)
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    if LOCATIONS_SHEET not in wb.sheetnames:
+        return
+
+    records, photos_by_index = _read_locations_sheet(wb[LOCATIONS_SHEET])
+
+    # Blad volledig herbouwen i.p.v. de rij ter plekke te verwijderen: openpyxl schuift
+    # afbeelding-ankers niet automatisch mee bij het verwijderen van rijen, dit voorkomt
+    # dat foto's na een verwijdering bij de verkeerde rij terechtkomen.
+    del wb[LOCATIONS_SHEET]
+    new_ws = wb.create_sheet(LOCATIONS_SHEET)
+    new_ws.append(COLUMNS)
+    for idx, record in enumerate(records):
+        if idx == index_to_delete:
+            continue
+        new_ws.append([record[col] for col in COLUMNS])
+        photo = photos_by_index.get(idx)
+        if photo:
+            _embed_photo(new_ws, new_ws.max_row, photo)
 
     out = io.BytesIO()
     wb.save(out)
@@ -138,30 +196,8 @@ def load_locations(file_id: str):
     if LOCATIONS_SHEET not in wb.sheetnames:
         return pd.DataFrame(columns=COLUMNS), {}
 
-    ws = wb[LOCATIONS_SHEET]
-    n = len(COLUMNS)
-    # Leest rechtstreeks via openpyxl i.p.v. pandas' header-gebaseerde inlezen: robuust
-    # tegen een sheet waarvan de header-rij per ongeluk verdwenen/beschadigd is (bv. door
-    # Google Sheets dat zijn eigen versie terugschrijft over een open bestand).
-    eerste_rij = [ws.cell(row=1, column=c + 1).value for c in range(n)]
-    heeft_header = eerste_rij == COLUMNS
-    eerste_datarij = 2 if heeft_header else 1
-
-    records = []
-    sheet_rij_naar_index = {}
-    for sheet_rij in range(eerste_datarij, ws.max_row + 1):
-        values = [ws.cell(row=sheet_rij, column=c + 1).value for c in range(n)]
-        if all(v is None for v in values):
-            continue
-        sheet_rij_naar_index[sheet_rij] = len(records)
-        records.append(dict(zip(COLUMNS, values)))
+    records, row_photos = _read_locations_sheet(wb[LOCATIONS_SHEET])
     df = pd.DataFrame(records, columns=COLUMNS)
-
-    row_photos = {}
-    for xl_image in ws._images:
-        sheet_rij = xl_image.anchor._from.row + 1  # 0-indexed -> 1-indexed
-        if sheet_rij in sheet_rij_naar_index:
-            row_photos[sheet_rij_naar_index[sheet_rij]] = image_bytes(xl_image)
     return df, row_photos
 
 
@@ -316,3 +352,24 @@ else:
                 if pd.notna(r["Latitude"]) and pd.notna(r["Longitude"]):
                     maps_url = f"https://www.google.com/maps?q={r['Latitude']},{r['Longitude']}"
                     st.markdown(f"[📍 Open in Google Maps]({maps_url})")
+
+                confirm_key = f"confirm_delete_{idx}"
+                if st.session_state.get(confirm_key):
+                    st.warning("Deze locatie definitief verwijderen?")
+                    c1, c2 = st.columns(2)
+                    if c1.button("Ja, verwijderen", key=f"yes_{idx}"):
+                        try:
+                            delete_location(FILE_ID, idx)
+                        except Exception as exc:
+                            st.error(f"Kon niet verwijderen: {exc}")
+                        else:
+                            st.session_state.pop(confirm_key, None)
+                            st.success("Verwijderd.")
+                            st.rerun()
+                    if c2.button("Annuleer", key=f"no_{idx}"):
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                else:
+                    if st.button("🗑️ Verwijderen", key=f"del_{idx}"):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
