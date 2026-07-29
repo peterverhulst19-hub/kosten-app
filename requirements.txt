@@ -1,6 +1,8 @@
 streamlit>=1.42
 openpyxl
-pandas
+pandas<3
+numpy<2.2
+pyarrow<19
 google-api-python-client
 google-auth
 Authlib
@@ -8,4 +10,4 @@ httpx
 streamlit-folium
 folium
 streamlit-js-eval
-Pillow
+Pillow<12
