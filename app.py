@@ -39,6 +39,44 @@ LOCATION_TYPES = list(TYPE_ICONS.keys())
 DEFAULT_ICON = TYPE_ICONS["Overig"]
 
 
+def render_banner():
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 2rem;
+        }
+        .leuke-banner {
+            background: linear-gradient(135deg, #0b3d63 0%, #14919b 60%, #45c2b3 100%);
+            border-radius: 18px;
+            padding: 2.2rem 2rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 10px 30px rgba(11, 61, 99, 0.25);
+            text-align: center;
+        }
+        .leuke-banner h1 {
+            margin: 0;
+            color: #ffffff;
+            font-size: 2.6rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+        .leuke-banner p {
+            margin: 0.4rem 0 0;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 1.05rem;
+        }
+        </style>
+        <div class="leuke-banner">
+            <h1>\U0001F5FA️ Leuke locaties</h1>
+            <p>Al jullie favoriete plekken, overzichtelijk verzameld.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def type_icon(type_locatie) -> str:
     return TYPE_ICONS.get(type_locatie, DEFAULT_ICON)
 
@@ -398,7 +436,7 @@ st.set_page_config(page_title="Leuke locaties", page_icon="\U0001F4CD")
 REQUIRED_SECRETS = ["auth", "gcp_service_account", "drive_file_id"]
 missing_secrets = [key for key in REQUIRED_SECRETS if key not in st.secrets]
 if missing_secrets:
-    st.title("Leuke locaties")
+    render_banner()
     st.error(
         "De app is nog niet volledig geconfigureerd. Ontbrekende secrets: "
         + ", ".join(missing_secrets)
@@ -408,7 +446,7 @@ if missing_secrets:
 
 # --- Login (enkel toegankelijk voor jezelf) ---
 if not st.user.is_logged_in:
-    st.title("Leuke locaties")
+    render_banner()
     st.write("Log in met Google om je locaties te beheren.")
     st.button("Inloggen met Google", on_click=st.login)
     st.stop()
@@ -419,9 +457,22 @@ if allowed_emails and st.user.email not in allowed_emails:
     st.button("Uitloggen", on_click=st.logout)
     st.stop()
 
+# --- Automatisch uitloggen na 30 minuten inactiviteit ---
+# Streamlit voert het script enkel opnieuw uit bij interactie, dus dit controleert bij
+# elke actie of het te lang geleden is sinds de vorige - niet een harde afsluiting op de
+# seconde na precies 30 minuten als de app gewoon open blijft staan zonder iets te doen.
+IDLE_TIMEOUT_SECONDS = 30 * 60
+laatste_activiteit = st.session_state.get("laatste_activiteit")
+if laatste_activiteit is not None and time.time() - laatste_activiteit > IDLE_TIMEOUT_SECONDS:
+    st.session_state.pop("laatste_activiteit", None)
+    st.info("Automatisch uitgelogd na 30 minuten inactiviteit.")
+    st.logout()
+    st.stop()
+st.session_state.laatste_activiteit = time.time()
+
 FILE_ID = st.secrets["drive_file_id"]
 
-st.title("Leuke locaties")
+render_banner()
 with st.sidebar:
     st.caption(f"Ingelogd als {st.user.email}")
     st.button("Uitloggen", on_click=st.logout)
