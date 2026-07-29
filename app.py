@@ -23,7 +23,7 @@ COLUMNS_MET_TYPE = BASE_COLUMNS + ["Type"]
 COLUMNS = COLUMNS_MET_TYPE + ["FotoId", "FotoLink"]
 COLUMN_VERSIONS = [COLUMNS, COLUMNS_MET_TYPE, BASE_COLUMNS]
 PHOTO_COLUMN = "G"  # enkel nog gebruikt voor foto's die al vóór de Drive-opslag waren ingebed
-PHOTOS_FOLDER_NAME = "Leuke locaties - foto's"
+PHOTOS_FOLDER_NAME = "Leuke locaties - fotos"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
@@ -172,8 +172,12 @@ def get_user_drive_service():
 
 
 def _get_or_create_photos_folder(service) -> str:
+    # Backslash en enkel aanhalingsteken moeten geëscaped worden in Drive's query-syntax,
+    # anders breekt een naam die zo'n teken bevat de 'q'-parameter (zie ook: waarom de
+    # foldernaam zelf geen apostrof meer heeft).
+    veilige_naam = PHOTOS_FOLDER_NAME.replace("\\", "\\\\").replace("'", "\\'")
     query = (
-        f"name = '{PHOTOS_FOLDER_NAME}' and "
+        f"name = '{veilige_naam}' and "
         "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     )
     result = service.files().list(q=query, fields="files(id)").execute()
