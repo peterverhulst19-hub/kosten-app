@@ -1,4 +1,5 @@
 import io
+import time
 from datetime import date
 
 import folium
@@ -54,28 +55,50 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+def _with_retries(func, attempts: int = 3, delay: float = 1.5):
+    # Mobiele verbindingen vallen wel eens even weg (bv. SSL record layer failure).
+    # Bij elke mislukte poging wordt ook de gecachte Drive-service weggegooid, voor
+    # het geval een verouderde/kapotte verbinding in de cache het probleem was.
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            return func()
+        except Exception as exc:
+            last_exc = exc
+            get_drive_service.clear()
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    raise last_exc
+
+
 def download_workbook_bytes(file_id: str) -> bytes:
-    service = get_drive_service()
-    meta = service.files().get(fileId=file_id, fields="mimeType").execute()
-    if meta["mimeType"] == GOOGLE_SHEETS_MIME:
-        # Native Google Sheet (aangemaakt via "Nieuw -> Google Spreadsheets"):
-        # moet geëxporteerd worden als xlsx, kan niet rechtstreeks gedownload worden.
-        request = service.files().export_media(fileId=file_id, mimeType=XLSX_MIME)
-    else:
-        # Een echt geüpload .xlsx-bestand.
-        request = service.files().get_media(fileId=file_id)
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return buffer.getvalue()
+    def _do():
+        service = get_drive_service()
+        meta = service.files().get(fileId=file_id, fields="mimeType").execute()
+        if meta["mimeType"] == GOOGLE_SHEETS_MIME:
+            # Native Google Sheet (aangemaakt via "Nieuw -> Google Spreadsheets"):
+            # moet geëxporteerd worden als xlsx, kan niet rechtstreeks gedownload worden.
+            request = service.files().export_media(fileId=file_id, mimeType=XLSX_MIME)
+        else:
+            # Een echt geüpload .xlsx-bestand.
+            request = service.files().get_media(fileId=file_id)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buffer.getvalue()
+
+    return _with_retries(_do)
 
 
 def upload_workbook_bytes(file_id: str, data: bytes) -> None:
-    service = get_drive_service()
-    media = MediaIoBaseUpload(io.BytesIO(data), mimetype=XLSX_MIME, resumable=False)
-    service.files().update(fileId=file_id, media_body=media).execute()
+    def _do():
+        service = get_drive_service()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=XLSX_MIME, resumable=False)
+        service.files().update(fileId=file_id, media_body=media).execute()
+
+    _with_retries(_do)
 
 
 def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
