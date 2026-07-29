@@ -12,7 +12,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image as PILImage
 from streamlit_folium import st_folium
-from streamlit_js_eval import get_geolocation
+from streamlit_js_eval import streamlit_js_eval
 
 LOCATIONS_SHEET = "Locaties"
 COLUMNS = ["Datum", "Naam", "Notities", "Latitude", "Longitude"]
@@ -22,6 +22,35 @@ GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
 
 # Antwerpen, gebruikt als startpunt zolang er nog geen locatie gekozen is.
 DEFAULT_LAT, DEFAULT_LON = 51.2194, 4.4025
+
+# streamlit_js_eval's eigen get_geolocation() vraagt geen enableHighAccuracy aan,
+# waardoor browsers vaak terugvallen op snelle maar grove wifi/cell-positionering
+# (nauwkeurigheid van een hele buurt i.p.v. de exacte plek). Deze eigen variant
+# vraagt expliciet GPS-nauwkeurigheid op, via dezelfde onderliggende JS-eval-component.
+_GEOLOCATION_JS = """
+new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+        (position) => resolve({
+            coords: {
+                accuracy: position.coords.accuracy,
+                altitude: position.coords.altitude,
+                altitudeAccuracy: position.coords.altitudeAccuracy,
+                heading: position.coords.heading,
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                speed: position.coords.speed,
+            },
+            timestamp: position.timestamp,
+        }),
+        (error) => resolve({error: {code: error.code, message: error.message}}),
+        {enableHighAccuracy: true, timeout: 15000, maximumAge: 0}
+    );
+})
+"""
+
+
+def get_precise_geolocation(component_key: str = "get_precise_location"):
+    return streamlit_js_eval(js_expressions=_GEOLOCATION_JS, key=component_key)
 
 
 def compress_photo(data: bytes, max_size: int = 1024, quality: int = 75) -> bytes:
@@ -242,11 +271,14 @@ if "lat" not in st.session_state:
     st.session_state.lat = DEFAULT_LAT
     st.session_state.lon = DEFAULT_LON
 
-geoloc = get_geolocation()
+geoloc = get_precise_geolocation()
 if st.button("📍 Gebruik mijn huidige locatie"):
     if geoloc and "coords" in geoloc:
         st.session_state.lat = geoloc["coords"]["latitude"]
         st.session_state.lon = geoloc["coords"]["longitude"]
+        nauwkeurigheid = geoloc["coords"].get("accuracy")
+        if nauwkeurigheid:
+            st.caption(f"Nauwkeurigheid: ±{nauwkeurigheid:.0f} m")
     elif geoloc and "error" in geoloc:
         st.warning(
             f"Kon je locatie niet ophalen: {geoloc['error'].get('message', 'onbekende fout')}. "
