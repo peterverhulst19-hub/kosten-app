@@ -39,38 +39,162 @@ LOCATION_TYPES = list(TYPE_ICONS.keys())
 DEFAULT_ICON = TYPE_ICONS["Overig"]
 
 
+# Kleurenpalet van de banner, hergebruikt in alle andere styling zodat de rest van de
+# app er als één geheel mee oogt i.p.v. een gekleurde banner boven een kale standaard-UI.
+_DEEP_BLUE = "#0b3d63"
+_TEAL = "#14919b"
+_LIGHT_TEAL = "#45c2b3"
+
+
+def inject_global_styles():
+    st.markdown(
+        f"""
+        <style>
+        .block-container {{
+            padding-top: 2rem;
+            max-width: 880px;
+        }}
+        [data-testid="stAppViewContainer"] {{
+            background: linear-gradient(180deg, #f4fbfb 0%, #eef5f6 100%);
+        }}
+        hr {{
+            height: 3px;
+            border: none;
+            border-radius: 999px;
+            background: linear-gradient(90deg, {_DEEP_BLUE}, {_LIGHT_TEAL});
+            opacity: 0.55;
+        }}
+        .leuke-section-header {{
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin: 1.8rem 0 1rem;
+        }}
+        .leuke-section-header .icon {{
+            font-size: 1.5rem;
+        }}
+        .leuke-section-header h2 {{
+            margin: 0;
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: {_DEEP_BLUE};
+            white-space: nowrap;
+        }}
+        .leuke-section-header .bar {{
+            flex: 1;
+            height: 3px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, {_TEAL}, transparent);
+        }}
+        .st-key-add_location_panel,
+        .st-key-overview_panel,
+        div[class*="st-key-card_"] {{
+            border-radius: 16px !important;
+            background: #ffffff;
+            box-shadow: 0 4px 16px rgba(11, 61, 99, 0.08);
+            transition: box-shadow 0.2s ease;
+        }}
+        div[class*="st-key-card_"]:hover {{
+            box-shadow: 0 8px 22px rgba(11, 61, 99, 0.14);
+        }}
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stTextArea"] textarea,
+        div[data-testid="stDateInput"] input,
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] {{
+            border-radius: 10px !important;
+        }}
+        div[data-testid="stTextInput"] input:focus,
+        div[data-testid="stTextArea"] textarea:focus {{
+            border-color: {_TEAL} !important;
+            box-shadow: 0 0 0 1px {_TEAL} !important;
+        }}
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button {{
+            border-radius: 999px;
+            border: 1.5px solid {_TEAL};
+            color: {_DEEP_BLUE};
+            transition: all 0.15s ease;
+        }}
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stDownloadButton"] button:hover {{
+            border-color: {_DEEP_BLUE};
+            color: #ffffff;
+            background: linear-gradient(135deg, {_DEEP_BLUE}, {_TEAL});
+        }}
+        div[data-testid="stFormSubmitButton"] button {{
+            border-radius: 999px;
+            border: none;
+            background: linear-gradient(135deg, {_DEEP_BLUE} 0%, {_TEAL} 100%);
+            color: #ffffff;
+            font-weight: 600;
+            padding: 0.5rem 1.7rem;
+            box-shadow: 0 4px 14px rgba(11, 61, 99, 0.25);
+            transition: box-shadow 0.15s ease, transform 0.15s ease;
+        }}
+        div[data-testid="stFormSubmitButton"] button:hover {{
+            box-shadow: 0 6px 18px rgba(11, 61, 99, 0.35);
+            transform: translateY(-1px);
+            color: #ffffff;
+        }}
+        div[data-testid="stTabs"] button[role="tab"] {{
+            font-weight: 600;
+            color: #4a6572;
+        }}
+        div[data-testid="stTabs"] button[aria-selected="true"] {{
+            color: {_DEEP_BLUE};
+        }}
+        div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
+            background-color: {_TEAL} !important;
+            height: 3px;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_banner():
     st.markdown(
-        """
+        f"""
         <style>
-        .block-container {
-            padding-top: 2rem;
-        }
-        .leuke-banner {
-            background: linear-gradient(135deg, #0b3d63 0%, #14919b 60%, #45c2b3 100%);
+        .leuke-banner {{
+            background: linear-gradient(135deg, {_DEEP_BLUE} 0%, {_TEAL} 60%, {_LIGHT_TEAL} 100%);
             border-radius: 18px;
             padding: 2.2rem 2rem;
             margin-bottom: 1.5rem;
             box-shadow: 0 10px 30px rgba(11, 61, 99, 0.25);
             text-align: center;
-        }
-        .leuke-banner h1 {
+        }}
+        .leuke-banner h1 {{
             margin: 0;
             color: #ffffff;
             font-size: 2.6rem;
             font-weight: 800;
             letter-spacing: 0.02em;
             text-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
-        .leuke-banner p {
+        }}
+        .leuke-banner p {{
             margin: 0.4rem 0 0;
             color: rgba(255, 255, 255, 0.85);
             font-size: 1.05rem;
-        }
+        }}
         </style>
         <div class="leuke-banner">
             <h1>\U0001F5FA️ Leuke locaties</h1>
             <p>Al jullie favoriete plekken, overzichtelijk verzameld.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(icon: str, text: str):
+    st.markdown(
+        f"""
+        <div class="leuke-section-header">
+            <span class="icon">{icon}</span>
+            <h2>{text}</h2>
+            <span class="bar"></span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -430,6 +554,7 @@ def load_locations(file_id: str):
 
 
 st.set_page_config(page_title="Leuke locaties", page_icon="\U0001F4CD")
+inject_global_styles()
 
 # --- Configuratie-check: geeft een duidelijke melding i.p.v. een kale
 # "Internal server error" zolang niet alle secrets zijn ingevuld. ---
@@ -477,140 +602,143 @@ with st.sidebar:
     st.caption(f"Ingelogd als {st.user.email}")
     st.button("Uitloggen", on_click=st.logout)
 
-st.subheader("Nieuwe locatie toevoegen")
+render_section_header("➕", "Nieuwe locatie toevoegen")
 
 if "lat" not in st.session_state:
     st.session_state.lat = DEFAULT_LAT
     st.session_state.lon = DEFAULT_LON
 
-geoloc = get_precise_geolocation()
-if st.button("📍 Gebruik mijn huidige locatie"):
-    if geoloc and "coords" in geoloc:
-        st.session_state.lat = geoloc["coords"]["latitude"]
-        st.session_state.lon = geoloc["coords"]["longitude"]
-        nauwkeurigheid = geoloc["coords"].get("accuracy")
-        if nauwkeurigheid:
-            st.caption(f"Nauwkeurigheid: ±{nauwkeurigheid:.0f} m")
-    elif geoloc and "error" in geoloc:
-        st.warning(
-            f"Kon je locatie niet ophalen: {geoloc['error'].get('message', 'onbekende fout')}. "
-            "Geef de browser toestemming voor locatietoegang en probeer opnieuw."
-        )
-    else:
-        st.warning("Nog geen locatie beschikbaar, probeer het nog eens.")
-
-picker_map = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
-folium.Marker([st.session_state.lat, st.session_state.lon]).add_to(picker_map)
-map_click = st_folium(picker_map, height=350, use_container_width=True, key="location_picker")
-if map_click and map_click.get("last_clicked"):
-    st.session_state.lat = map_click["last_clicked"]["lat"]
-    st.session_state.lon = map_click["last_clicked"]["lng"]
-
-picker_maps_url = f"https://www.google.com/maps?q={st.session_state.lat},{st.session_state.lon}"
-st.caption(
-    f"Geselecteerde locatie: {st.session_state.lat:.5f}, {st.session_state.lon:.5f} — "
-    f"[📍 Bekijk in Google Maps]({picker_maps_url})"
-)
-
-# Buiten het formulier: widgets in een form reageren pas na "Toevoegen", waardoor
-# de camera/upload-widget hieronder anders niet meteen zou verschijnen/reageren.
-if "foto_reset" not in st.session_state:
-    st.session_state.foto_reset = 0
-reset_suffix = st.session_state.foto_reset
-
-st.markdown("**Foto** (optioneel)")
-foto_modus = st.radio(
-    "Foto", ["Geen", "Nemen", "Kiezen"], horizontal=True,
-    key=f"foto_modus_{reset_suffix}", label_visibility="collapsed",
-)
-foto_ruw = None
-if foto_modus == "Nemen":
-    camera_bestand = st.camera_input("Neem een foto", key=f"camera_foto_{reset_suffix}")
-    if camera_bestand:
-        foto_ruw = camera_bestand.getvalue()
-elif foto_modus == "Kiezen":
-    upload_bestand = st.file_uploader(
-        "Kies een foto", type=["jpg", "jpeg", "png"], key=f"upload_foto_{reset_suffix}"
-    )
-    if upload_bestand:
-        foto_ruw = upload_bestand.getvalue()
-
-if foto_ruw:
-    st.image(foto_ruw, caption="Voorbeeld", width=200)
-
-with st.form("nieuwe_locatie", clear_on_submit=True):
-    naam = st.text_input("Naam")
-    type_locatie = st.selectbox(
-        "Type", LOCATION_TYPES, format_func=lambda t: f"{TYPE_ICONS[t]} {t}"
-    )
-    notities = st.text_area("Notities (optioneel)")
-    datum = st.date_input("Datum", value=date.today())
-
-    submitted = st.form_submit_button("Toevoegen")
-
-    if submitted:
-        if not naam:
-            st.error("Vul een naam in.")
+with st.container(border=True, key="add_location_panel"):
+    geoloc = get_precise_geolocation()
+    if st.button("📍 Gebruik mijn huidige locatie"):
+        if geoloc and "coords" in geoloc:
+            st.session_state.lat = geoloc["coords"]["latitude"]
+            st.session_state.lon = geoloc["coords"]["longitude"]
+            nauwkeurigheid = geoloc["coords"].get("accuracy")
+            if nauwkeurigheid:
+                st.caption(f"Nauwkeurigheid: ±{nauwkeurigheid:.0f} m")
+        elif geoloc and "error" in geoloc:
+            st.warning(
+                f"Kon je locatie niet ophalen: {geoloc['error'].get('message', 'onbekende fout')}. "
+                "Geef de browser toestemming voor locatietoegang en probeer opnieuw."
+            )
         else:
-            row = {
-                "Datum": datum,
-                "Naam": naam,
-                "Type": type_locatie,
-                "Notities": notities,
-                "Latitude": st.session_state.lat,
-                "Longitude": st.session_state.lon,
-            }
-            foto_bytes = compress_photo(foto_ruw) if foto_ruw else None
-            try:
-                save_location(FILE_ID, row, foto_bytes)
-            except Exception as exc:
-                st.error(f"Kon niet opslaan naar Google Drive: {exc}")
+            st.warning("Nog geen locatie beschikbaar, probeer het nog eens.")
+
+    picker_map = folium.Map(location=[st.session_state.lat, st.session_state.lon], zoom_start=13)
+    folium.Marker([st.session_state.lat, st.session_state.lon]).add_to(picker_map)
+    map_click = st_folium(picker_map, height=350, use_container_width=True, key="location_picker")
+    if map_click and map_click.get("last_clicked"):
+        st.session_state.lat = map_click["last_clicked"]["lat"]
+        st.session_state.lon = map_click["last_clicked"]["lng"]
+
+    picker_maps_url = f"https://www.google.com/maps?q={st.session_state.lat},{st.session_state.lon}"
+    st.caption(
+        f"Geselecteerde locatie: {st.session_state.lat:.5f}, {st.session_state.lon:.5f} — "
+        f"[📍 Bekijk in Google Maps]({picker_maps_url})"
+    )
+
+    # Buiten het formulier: widgets in een form reageren pas na "Toevoegen", waardoor
+    # de camera/upload-widget hieronder anders niet meteen zou verschijnen/reageren.
+    if "foto_reset" not in st.session_state:
+        st.session_state.foto_reset = 0
+    reset_suffix = st.session_state.foto_reset
+
+    st.markdown("**Foto** (optioneel)")
+    foto_modus = st.radio(
+        "Foto", ["Geen", "Nemen", "Kiezen"], horizontal=True,
+        key=f"foto_modus_{reset_suffix}", label_visibility="collapsed",
+    )
+    foto_ruw = None
+    if foto_modus == "Nemen":
+        camera_bestand = st.camera_input("Neem een foto", key=f"camera_foto_{reset_suffix}")
+        if camera_bestand:
+            foto_ruw = camera_bestand.getvalue()
+    elif foto_modus == "Kiezen":
+        upload_bestand = st.file_uploader(
+            "Kies een foto", type=["jpg", "jpeg", "png"], key=f"upload_foto_{reset_suffix}"
+        )
+        if upload_bestand:
+            foto_ruw = upload_bestand.getvalue()
+
+    if foto_ruw:
+        st.image(foto_ruw, caption="Voorbeeld", width=200)
+
+    with st.form("nieuwe_locatie", clear_on_submit=True):
+        naam = st.text_input("Naam")
+        type_locatie = st.selectbox(
+            "Type", LOCATION_TYPES, format_func=lambda t: f"{TYPE_ICONS[t]} {t}"
+        )
+        notities = st.text_area("Notities (optioneel)")
+        datum = st.date_input("Datum", value=date.today())
+
+        submitted = st.form_submit_button("Toevoegen")
+
+        if submitted:
+            if not naam:
+                st.error("Vul een naam in.")
             else:
-                st.success(f"'{naam}' toegevoegd!")
-                st.session_state.foto_reset += 1
-                st.rerun()
+                row = {
+                    "Datum": datum,
+                    "Naam": naam,
+                    "Type": type_locatie,
+                    "Notities": notities,
+                    "Latitude": st.session_state.lat,
+                    "Longitude": st.session_state.lon,
+                }
+                foto_bytes = compress_photo(foto_ruw) if foto_ruw else None
+                try:
+                    save_location(FILE_ID, row, foto_bytes)
+                except Exception as exc:
+                    st.error(f"Kon niet opslaan naar Google Drive: {exc}")
+                else:
+                    st.success(f"'{naam}' toegevoegd!")
+                    st.session_state.foto_reset += 1
+                    st.rerun()
 
 st.divider()
-st.subheader("Overzicht")
+render_section_header("🌍", "Overzicht")
 
 locaties, row_photos = load_locations(FILE_ID)
 
 if locaties.empty:
     st.info("Nog geen locaties toegevoegd.")
 else:
-    zoek = st.text_input("Zoeken", placeholder="Naam of notities...")
-    gefilterd = locaties
-    if zoek:
-        mask = (
-            locaties["Naam"].str.contains(zoek, case=False, na=False)
-            | locaties["Notities"].str.contains(zoek, case=False, na=False)
-        )
-        gefilterd = locaties[mask]
+    with st.container(border=True, key="overview_panel"):
+        zoek = st.text_input("Zoeken", placeholder="Naam of notities...")
+        gefilterd = locaties
+        if zoek:
+            mask = (
+                locaties["Naam"].str.contains(zoek, case=False, na=False)
+                | locaties["Notities"].str.contains(zoek, case=False, na=False)
+            )
+            gefilterd = locaties[mask]
 
-    gefilterd_geo = gefilterd.dropna(subset=["Latitude", "Longitude"])
-    ontbrekend = len(gefilterd) - len(gefilterd_geo)
-    if ontbrekend:
-        st.warning(f"{ontbrekend} locatie(s) hebben geen geldige coördinaten en worden niet op de kaart getoond.")
+        gefilterd_geo = gefilterd.dropna(subset=["Latitude", "Longitude"])
+        ontbrekend = len(gefilterd) - len(gefilterd_geo)
+        if ontbrekend:
+            st.warning(f"{ontbrekend} locatie(s) hebben geen geldige coördinaten en worden niet op de kaart getoond.")
 
-    if not gefilterd_geo.empty:
-        overview_map = folium.Map(
-            location=[gefilterd_geo["Latitude"].mean(), gefilterd_geo["Longitude"].mean()],
-            zoom_start=7,
-        )
-        for _, r in gefilterd_geo.iterrows():
-            folium.Marker(
-                [r["Latitude"], r["Longitude"]],
-                popup=f"{type_icon(r['Type'])} {r['Naam']} ({r['Datum']})",
-                icon=folium.DivIcon(
-                    html=f'<div style="font-size: 24px; transform: translate(-50%, -50%);">{type_icon(r["Type"])}</div>'
-                ),
-            ).add_to(overview_map)
-        st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
+        if not gefilterd_geo.empty:
+            overview_map = folium.Map(
+                location=[gefilterd_geo["Latitude"].mean(), gefilterd_geo["Longitude"].mean()],
+                zoom_start=7,
+            )
+            for _, r in gefilterd_geo.iterrows():
+                folium.Marker(
+                    [r["Latitude"], r["Longitude"]],
+                    popup=f"{type_icon(r['Type'])} {r['Naam']} ({r['Datum']})",
+                    icon=folium.DivIcon(
+                        html=f'<div style="font-size: 24px; transform: translate(-50%, -50%);">{type_icon(r["Type"])}</div>'
+                    ),
+                ).add_to(overview_map)
+            st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
 
     FOTO_BREEDTE = 120  # klein houden i.p.v. de volledige kolombreedte
 
     def render_location_card(idx, r, tab_key):
-        with st.container(border=True):
+        card_key = f"card_{tab_key.replace(' ', '_')}_{idx}"
+        with st.container(border=True, key=card_key):
             cols = st.columns([1, 2])
             with cols[0]:
                 foto_id = r.get("FotoId")
