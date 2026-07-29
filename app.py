@@ -513,7 +513,9 @@ else:
             ).add_to(overview_map)
         st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
 
-    for idx, r in gefilterd.sort_values("Datum", ascending=False).iterrows():
+    FOTO_BREEDTE = 120  # klein houden i.p.v. de volledige kolombreedte
+
+    def render_location_card(idx, r):
         with st.container(border=True):
             cols = st.columns([1, 2])
             with cols[0]:
@@ -521,9 +523,9 @@ else:
                 if foto_id:
                     foto_data = fetch_drive_photo_bytes(foto_id)
                     if foto_data:
-                        st.image(foto_data)
+                        st.image(foto_data, width=FOTO_BREEDTE)
                 elif idx in row_photos:
-                    st.image(row_photos[idx])
+                    st.image(row_photos[idx], width=FOTO_BREEDTE)
             with cols[1]:
                 st.markdown(f"**{type_icon(r['Type'])} {r['Naam']}** — {r['Datum']}")
                 if r.get("Notities"):
@@ -554,3 +556,14 @@ else:
                     if st.button("🗑️ Verwijderen", key=f"del_{idx}"):
                         st.session_state[confirm_key] = True
                         st.rerun()
+
+    tab_labels = ["Alle"] + [f"{TYPE_ICONS[t]} {t}" for t in LOCATION_TYPES]
+    tabs = st.tabs(tab_labels)
+    for tab, type_filter in zip(tabs, [None] + LOCATION_TYPES):
+        with tab:
+            subset = gefilterd if type_filter is None else gefilterd[gefilterd["Type"] == type_filter]
+            if subset.empty:
+                st.caption("Geen locaties in deze categorie.")
+                continue
+            for idx, r in subset.sort_values("Datum", ascending=False).iterrows():
+                render_location_card(idx, r)
