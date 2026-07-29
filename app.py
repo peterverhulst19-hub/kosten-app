@@ -577,6 +577,21 @@ if not st.user.is_logged_in:
     st.button("Inloggen met Google", on_click=st.login)
     st.stop()
 
+# Streamlits login-cookie blijft standaard 30 dagen geldig (niet aanpasbaar via
+# secrets), dus zonder onderstaande check zou de app na het (her)openen gewoon
+# automatisch weer ingelogd zijn. We controleren dit één keer per sessie aan de
+# hand van de 'iat' (issued-at) claim van Google's ID-token: is die niet vers
+# (net ingelogd), dan komt de login duidelijk van de oude cookie i.p.v. een
+# bewuste inlog-actie in déze sessie -> forceer opnieuw inloggen. Eenmaal
+# bevestigd blijft de rest van de sessie gewoon werken, ook na 2 minuten.
+VERSE_LOGIN_TOLERANTIE_SECONDEN = 120
+if not st.session_state.get("login_bevestigd"):
+    iat = st.user.get("iat")
+    if iat is None or time.time() - iat > VERSE_LOGIN_TOLERANTIE_SECONDEN:
+        st.logout()
+        st.stop()
+    st.session_state.login_bevestigd = True
+
 allowed_emails = st.secrets.get("allowed_emails", [])
 if allowed_emails and st.user.email not in allowed_emails:
     st.error(f"Geen toegang voor {st.user.email}.")
