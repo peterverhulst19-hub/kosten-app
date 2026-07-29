@@ -297,30 +297,24 @@ def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
     upload_workbook_bytes(file_id, out.getvalue())
 
 
-def delete_location(file_id: str, index_to_delete: int) -> None:
+def _rewrite_locations_sheet(file_id: str, mutate) -> None:
+    # Blad volledig herbouwen i.p.v. rijen ter plekke te wijzigen/verwijderen: openpyxl
+    # schuift afbeelding-ankers niet automatisch mee, dit voorkomt dat foto's bij de
+    # verkeerde rij terechtkomen. `mutate(records, photos_by_index)` past beide lijsten
+    # in place aan; een record op None zetten laat die rij gewoon weg bij het herbouwen.
     data = download_workbook_bytes(file_id)
     wb = openpyxl.load_workbook(io.BytesIO(data))
     if LOCATIONS_SHEET not in wb.sheetnames:
         return
 
     records, photos_by_index = _read_locations_sheet(wb[LOCATIONS_SHEET])
+    mutate(records, photos_by_index)
 
-    if 0 <= index_to_delete < len(records):
-        foto_id = records[index_to_delete].get("FotoId")
-        if foto_id:
-            try:
-                get_user_drive_service().files().delete(fileId=foto_id).execute()
-            except Exception:
-                pass  # foto zelf verwijderen is best-effort, het record verdwijnt sowieso
-
-    # Blad volledig herbouwen i.p.v. de rij ter plekke te verwijderen: openpyxl schuift
-    # afbeelding-ankers niet automatisch mee bij het verwijderen van rijen, dit voorkomt
-    # dat foto's na een verwijdering bij de verkeerde rij terechtkomen.
     del wb[LOCATIONS_SHEET]
     new_ws = wb.create_sheet(LOCATIONS_SHEET)
     new_ws.append(COLUMNS)
     for idx, record in enumerate(records):
-        if idx == index_to_delete:
+        if record is None:
             continue
         new_ws.append([record.get(col, "") for col in COLUMNS])
         photo = photos_by_index.get(idx)
@@ -330,6 +324,55 @@ def delete_location(file_id: str, index_to_delete: int) -> None:
     out = io.BytesIO()
     wb.save(out)
     upload_workbook_bytes(file_id, out.getvalue())
+
+
+def _delete_drive_photo(foto_id: str) -> None:
+    if not foto_id:
+        return
+    try:
+        get_user_drive_service().files().delete(fileId=foto_id).execute()
+    except Exception:
+        pass  # foto zelf verwijderen is best-effort, het record wordt sowieso aangepast
+
+
+def delete_location(file_id: str, index_to_delete: int) -> None:
+    def mutate(records, photos_by_index):
+        if 0 <= index_to_delete < len(records):
+            _delete_drive_photo(records[index_to_delete].get("FotoId"))
+            records[index_to_delete] = None
+            photos_by_index.pop(index_to_delete, None)
+
+    _rewrite_locations_sheet(file_id, mutate)
+
+
+def update_location(
+    file_id: str, index_to_update: int, updates: dict,
+    new_photo_bytes: bytes | None = None, remove_photo: bool = False,
+) -> None:
+    nieuwe_foto_id = nieuwe_foto_link = ""
+    if new_photo_bytes:
+        bestandsnaam = f"{updates.get('Naam', 'locatie')}_{updates.get('Datum', '')}.jpg"
+        nieuwe_foto_id, nieuwe_foto_link = upload_photo_to_drive(new_photo_bytes, bestandsnaam)
+
+    def mutate(records, photos_by_index):
+        if not (0 <= index_to_update < len(records)):
+            return
+        oud_record = records[index_to_update]
+
+        if new_photo_bytes or remove_photo:
+            _delete_drive_photo(oud_record.get("FotoId"))
+            photos_by_index.pop(index_to_update, None)  # oude ingebedde foto niet meenemen
+
+        nieuw_record = {**oud_record, **updates}
+        if new_photo_bytes:
+            nieuw_record["FotoId"] = nieuwe_foto_id
+            nieuw_record["FotoLink"] = nieuwe_foto_link
+        elif remove_photo:
+            nieuw_record["FotoId"] = ""
+            nieuw_record["FotoLink"] = ""
+        records[index_to_update] = nieuw_record
+
+    _rewrite_locations_sheet(file_id, mutate)
 
 
 def load_locations(file_id: str):
@@ -515,7 +558,7 @@ else:
 
     FOTO_BREEDTE = 120  # klein houden i.p.v. de volledige kolombreedte
 
-    def render_location_card(idx, r):
+    def render_location_card(idx, r, tab_key):
         with st.container(border=True):
             cols = st.columns([1, 2])
             with cols[0]:
@@ -536,11 +579,57 @@ else:
                 if r.get("FotoLink"):
                     st.markdown(f"[🖼️ Open foto in Drive]({r['FotoLink']})")
 
-                confirm_key = f"confirm_delete_{idx}"
-                if st.session_state.get(confirm_key):
+                edit_key = f"editing_{tab_key}_{idx}"
+                confirm_key = f"confirm_delete_{tab_key}_{idx}"
+
+                if st.session_state.get(edit_key):
+                    huidig_type = r["Type"] if r["Type"] in LOCATION_TYPES else LOCATION_TYPES[-1]
+                    nieuwe_naam = st.text_input("Naam", value=r["Naam"], key=f"edit_naam_{tab_key}_{idx}")
+                    nieuw_type = st.selectbox(
+                        "Type", LOCATION_TYPES, index=LOCATION_TYPES.index(huidig_type),
+                        format_func=lambda t: f"{TYPE_ICONS[t]} {t}", key=f"edit_type_{tab_key}_{idx}",
+                    )
+                    nieuwe_notities = st.text_area(
+                        "Notities", value=r.get("Notities") or "", key=f"edit_notities_{tab_key}_{idx}"
+                    )
+                    nieuwe_datum = st.date_input("Datum", value=r["Datum"], key=f"edit_datum_{tab_key}_{idx}")
+                    nieuwe_foto_bestand = st.file_uploader(
+                        "Nieuwe foto (optioneel, vervangt de huidige)", type=["jpg", "jpeg", "png"],
+                        key=f"edit_foto_{tab_key}_{idx}",
+                    )
+                    verwijder_foto = False
+                    if r.get("FotoId") or idx in row_photos:
+                        verwijder_foto = st.checkbox(
+                            "Huidige foto verwijderen", key=f"edit_verwijder_foto_{tab_key}_{idx}"
+                        )
+
+                    ec1, ec2 = st.columns(2)
+                    if ec1.button("Opslaan", key=f"edit_opslaan_{tab_key}_{idx}"):
+                        updates = {
+                            "Naam": nieuwe_naam,
+                            "Type": nieuw_type,
+                            "Notities": nieuwe_notities,
+                            "Datum": nieuwe_datum,
+                        }
+                        nieuwe_foto_bytes = (
+                            compress_photo(nieuwe_foto_bestand.getvalue()) if nieuwe_foto_bestand else None
+                        )
+                        try:
+                            update_location(FILE_ID, idx, updates, nieuwe_foto_bytes, verwijder_foto)
+                        except Exception as exc:
+                            st.error(f"Kon niet bijwerken: {exc}")
+                        else:
+                            st.session_state.pop(edit_key, None)
+                            st.success("Bijgewerkt.")
+                            st.rerun()
+                    if ec2.button("Annuleer", key=f"edit_annuleer_{tab_key}_{idx}"):
+                        st.session_state.pop(edit_key, None)
+                        st.rerun()
+
+                elif st.session_state.get(confirm_key):
                     st.warning("Deze locatie definitief verwijderen?")
                     c1, c2 = st.columns(2)
-                    if c1.button("Ja, verwijderen", key=f"yes_{idx}"):
+                    if c1.button("Ja, verwijderen", key=f"yes_{tab_key}_{idx}"):
                         try:
                             delete_location(FILE_ID, idx)
                         except Exception as exc:
@@ -549,11 +638,16 @@ else:
                             st.session_state.pop(confirm_key, None)
                             st.success("Verwijderd.")
                             st.rerun()
-                    if c2.button("Annuleer", key=f"no_{idx}"):
+                    if c2.button("Annuleer", key=f"no_{tab_key}_{idx}"):
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
+
                 else:
-                    if st.button("🗑️ Verwijderen", key=f"del_{idx}"):
+                    bc1, bc2 = st.columns(2)
+                    if bc1.button("✏️ Bewerken", key=f"bewerk_{tab_key}_{idx}"):
+                        st.session_state[edit_key] = True
+                        st.rerun()
+                    if bc2.button("🗑️ Verwijderen", key=f"del_{tab_key}_{idx}"):
                         st.session_state[confirm_key] = True
                         st.rerun()
 
@@ -565,5 +659,6 @@ else:
             if subset.empty:
                 st.caption("Geen locaties in deze categorie.")
                 continue
+            tab_key = type_filter or "alle"
             for idx, r in subset.sort_values("Datum", ascending=False).iterrows():
-                render_location_card(idx, r)
+                render_location_card(idx, r, tab_key)
