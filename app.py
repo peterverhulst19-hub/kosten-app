@@ -16,6 +16,20 @@ from PIL import Image as PILImage
 from streamlit_folium import st_folium
 from streamlit_js_eval import streamlit_js_eval
 
+try:
+    # Streamlit 1.53-1.56's logout handler fetches the OIDC provider's discovery
+    # document to build a federated end-session redirect URL. Google has no
+    # end_session_endpoint (so this is a no-op for us anyway), but the fetch
+    # reliably crashes the whole process with native heap corruption on
+    # Streamlit Cloud. clear_auth_cookie() already runs before this call, so
+    # logout still works correctly - it just always falls back to
+    # redirect_to_base() instead of a provider-specific redirect.
+    from streamlit.web.server import oauth_authlib_routes as _oauth_routes
+
+    _oauth_routes.AuthLogoutHandler._get_provider_logout_url = lambda self: None
+except ImportError:
+    pass
+
 LOCATIONS_SHEET = "Locaties"
 # Kolom-versies, nieuwste eerst. Oudere sheets (aangemaakt vóór een latere
 # toevoeging zoals "Type" of de foto-kolommen) blijven zo leesbaar.
