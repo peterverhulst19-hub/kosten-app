@@ -300,21 +300,36 @@ st.caption(
     f"[📍 Bekijk in Google Maps]({picker_maps_url})"
 )
 
+# Buiten het formulier: widgets in een form reageren pas na "Toevoegen", waardoor
+# de camera/upload-widget hieronder anders niet meteen zou verschijnen/reageren.
+if "foto_reset" not in st.session_state:
+    st.session_state.foto_reset = 0
+reset_suffix = st.session_state.foto_reset
+
+st.markdown("**Foto** (optioneel)")
+foto_modus = st.radio(
+    "Foto", ["Geen", "Nemen", "Kiezen"], horizontal=True,
+    key=f"foto_modus_{reset_suffix}", label_visibility="collapsed",
+)
+foto_ruw = None
+if foto_modus == "Nemen":
+    camera_bestand = st.camera_input("Neem een foto", key=f"camera_foto_{reset_suffix}")
+    if camera_bestand:
+        foto_ruw = camera_bestand.getvalue()
+elif foto_modus == "Kiezen":
+    upload_bestand = st.file_uploader(
+        "Kies een foto", type=["jpg", "jpeg", "png"], key=f"upload_foto_{reset_suffix}"
+    )
+    if upload_bestand:
+        foto_ruw = upload_bestand.getvalue()
+
+if foto_ruw:
+    st.image(foto_ruw, caption="Voorbeeld", width=200)
+
 with st.form("nieuwe_locatie", clear_on_submit=True):
     naam = st.text_input("Naam")
     notities = st.text_area("Notities (optioneel)")
     datum = st.date_input("Datum", value=date.today())
-
-    foto_modus = st.radio("Foto", ["Geen", "Nemen", "Kiezen"], horizontal=True)
-    foto_ruw = None
-    if foto_modus == "Nemen":
-        camera_bestand = st.camera_input("Neem een foto")
-        if camera_bestand:
-            foto_ruw = camera_bestand.getvalue()
-    elif foto_modus == "Kiezen":
-        upload_bestand = st.file_uploader("Kies een foto", type=["jpg", "jpeg", "png"])
-        if upload_bestand:
-            foto_ruw = upload_bestand.getvalue()
 
     submitted = st.form_submit_button("Toevoegen")
 
@@ -336,6 +351,8 @@ with st.form("nieuwe_locatie", clear_on_submit=True):
                 st.error(f"Kon niet opslaan naar Google Drive: {exc}")
             else:
                 st.success(f"'{naam}' toegevoegd!")
+                st.session_state.foto_reset += 1
+                st.rerun()
 
 st.divider()
 st.subheader("Overzicht")
