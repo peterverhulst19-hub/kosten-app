@@ -7,6 +7,7 @@ import openpyxl
 import pandas as pd
 import streamlit as st
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as UserCredentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from openpyxl.drawing.image import Image as XLImage
@@ -15,10 +16,32 @@ from streamlit_folium import st_folium
 from streamlit_js_eval import streamlit_js_eval
 
 LOCATIONS_SHEET = "Locaties"
-COLUMNS = ["Datum", "Naam", "Notities", "Latitude", "Longitude"]
-PHOTO_COLUMN = "F"
+# Kolom-versies, nieuwste eerst. Oudere sheets (aangemaakt vóór een latere
+# toevoeging zoals "Type" of de foto-kolommen) blijven zo leesbaar.
+BASE_COLUMNS = ["Datum", "Naam", "Notities", "Latitude", "Longitude"]
+COLUMNS_MET_TYPE = BASE_COLUMNS + ["Type"]
+COLUMNS = COLUMNS_MET_TYPE + ["FotoId", "FotoLink"]
+COLUMN_VERSIONS = [COLUMNS, COLUMNS_MET_TYPE, BASE_COLUMNS]
+PHOTO_COLUMN = "G"  # enkel nog gebruikt voor foto's die al vóór de Drive-opslag waren ingebed
+PHOTOS_FOLDER_NAME = "Leuke locaties - foto's"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 GOOGLE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+
+TYPE_ICONS = {
+    "Eten en drinken": "🍽️",
+    "Bezichtigingen": "🏰",
+    "Musea": "🖼️",
+    "Slaaplocaties": "🛏️",
+    "Wandelingen": "🥾",
+    "Overig": "📍",
+}
+LOCATION_TYPES = list(TYPE_ICONS.keys())
+DEFAULT_ICON = TYPE_ICONS["Overig"]
+
+
+def type_icon(type_locatie) -> str:
+    return TYPE_ICONS.get(type_locatie, DEFAULT_ICON)
+
 
 # Antwerpen, gebruikt als startpunt zolang er nog geen locatie gekozen is.
 DEFAULT_LAT, DEFAULT_LON = 51.2194, 4.4025
@@ -130,6 +153,70 @@ def upload_workbook_bytes(file_id: str, data: bytes) -> None:
     _with_retries(_do)
 
 
+# --- Foto's op Drive, als jouzelf i.p.v. het service-account ---
+# Service accounts hebben 0 bytes opslagquota en kunnen daarom geen nieuwe bestanden
+# aanmaken (enkel bestaande, gedeelde bestanden lezen/bijwerken, zoals de sheet zelf).
+# Voor foto's wordt daarom het toegangstoken van je eigen Google-login hergebruikt
+# (st.user.tokens["access"], vereist expose_tokens + een Drive-scope in [auth]).
+
+def get_user_drive_service():
+    try:
+        token = st.user.tokens["access"]
+    except (AttributeError, KeyError) as exc:
+        raise RuntimeError(
+            "Geen Drive-toegangstoken beschikbaar. Controleer of 'expose_tokens' en de "
+            "Drive-scope in de [auth]-secrets staan, en log opnieuw in."
+        ) from exc
+    creds = UserCredentials(token=token)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def _get_or_create_photos_folder(service) -> str:
+    query = (
+        f"name = '{PHOTOS_FOLDER_NAME}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    )
+    result = service.files().list(q=query, fields="files(id)").execute()
+    bestaande = result.get("files", [])
+    if bestaande:
+        return bestaande[0]["id"]
+    folder = service.files().create(
+        body={"name": PHOTOS_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
+        fields="id",
+    ).execute()
+    return folder["id"]
+
+
+def upload_photo_to_drive(photo_bytes: bytes, filename: str) -> tuple[str, str]:
+    def _do():
+        service = get_user_drive_service()
+        folder_id = _get_or_create_photos_folder(service)
+        media = MediaIoBaseUpload(io.BytesIO(photo_bytes), mimetype="image/jpeg", resumable=False)
+        file = service.files().create(
+            body={"name": filename, "parents": [folder_id]},
+            media_body=media,
+            fields="id, webViewLink",
+        ).execute()
+        return file["id"], file["webViewLink"]
+
+    return _with_retries(_do)
+
+
+@st.cache_data(show_spinner=False)
+def fetch_drive_photo_bytes(file_id: str) -> bytes | None:
+    try:
+        service = get_user_drive_service()
+        request = service.files().get_media(fileId=file_id)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buffer.getvalue()
+    except Exception:
+        return None
+
+
 def _embed_photo(ws, row_num: int, photo_bytes: bytes) -> None:
     pil_img = PILImage.open(io.BytesIO(photo_bytes))
     target_width = 160
@@ -143,20 +230,29 @@ def _embed_photo(ws, row_num: int, photo_bytes: bytes) -> None:
 def _read_locations_sheet(ws):
     # Leest rechtstreeks via openpyxl i.p.v. pandas' header-gebaseerde inlezen: robuust
     # tegen een sheet waarvan de header-rij per ongeluk verdwenen/beschadigd is (bv. door
-    # Google Sheets dat zijn eigen versie terugschrijft over een open bestand).
-    n = len(COLUMNS)
-    eerste_rij = [ws.cell(row=1, column=c + 1).value for c in range(n)]
-    heeft_header = eerste_rij == COLUMNS
-    eerste_datarij = 2 if heeft_header else 1
+    # Google Sheets dat zijn eigen versie terugschrijft over een open bestand), en tegen
+    # oudere sheets die nog niet alle kolommen (Type, FotoId, FotoLink) hebben.
+    eerste_rij = [ws.cell(row=1, column=c + 1).value for c in range(len(COLUMNS))]
+    kolommen = None
+    for versie in COLUMN_VERSIONS:
+        if eerste_rij[: len(versie)] == versie:
+            kolommen = versie
+            break
+    eerste_datarij = 2 if kolommen is not None else 1
+    if kolommen is None:
+        kolommen = COLUMNS
 
     records = []
     sheet_rij_naar_index = {}
     for sheet_rij in range(eerste_datarij, ws.max_row + 1):
-        values = [ws.cell(row=sheet_rij, column=c + 1).value for c in range(n)]
+        values = [ws.cell(row=sheet_rij, column=c + 1).value for c in range(len(kolommen))]
         if all(v is None for v in values):
             continue
         sheet_rij_naar_index[sheet_rij] = len(records)
-        records.append(dict(zip(COLUMNS, values)))
+        record = dict(zip(kolommen, values))
+        for col in COLUMNS:
+            record.setdefault(col, "")
+        records.append(record)
 
     photos_by_index = {}
     for xl_image in ws._images:
@@ -168,19 +264,29 @@ def _read_locations_sheet(ws):
 
 
 def save_location(file_id: str, row: dict, photo_bytes: bytes | None) -> None:
+    # Foto eerst uploaden (als eigen gebruiker, die wél Drive-opslagquota heeft) zodat
+    # we bij een uploadfout niets aan de sheet raken.
+    foto_id = foto_link = ""
+    if photo_bytes:
+        bestandsnaam = f"{row['Naam']}_{row['Datum']}.jpg"
+        foto_id, foto_link = upload_photo_to_drive(photo_bytes, bestandsnaam)
+
     data = download_workbook_bytes(file_id)
-    wb = openpyxl.load_workbook(io.BytesIO(data))  # niet read_only: nodig om afbeeldingen toe te voegen
+    wb = openpyxl.load_workbook(io.BytesIO(data))
 
     if LOCATIONS_SHEET not in wb.sheetnames:
         ws = wb.create_sheet(LOCATIONS_SHEET)
         ws.append(COLUMNS)
     else:
         ws = wb[LOCATIONS_SHEET]
-    ws.append([row[col] for col in COLUMNS])
-    row_num = ws.max_row
+        # Header aanvullen met eventueel ontbrekende (nieuwere) kolommen, zodat oudere
+        # sheets meegroeien zonder bestaande koptekst te verstoren.
+        for i, col in enumerate(COLUMNS):
+            if ws.cell(row=1, column=i + 1).value in (None, ""):
+                ws.cell(row=1, column=i + 1, value=col)
 
-    if photo_bytes:
-        _embed_photo(ws, row_num, photo_bytes)
+    volledige_row = {**row, "FotoId": foto_id, "FotoLink": foto_link}
+    ws.append([volledige_row.get(col, "") for col in COLUMNS])
 
     out = io.BytesIO()
     wb.save(out)
@@ -195,6 +301,14 @@ def delete_location(file_id: str, index_to_delete: int) -> None:
 
     records, photos_by_index = _read_locations_sheet(wb[LOCATIONS_SHEET])
 
+    if 0 <= index_to_delete < len(records):
+        foto_id = records[index_to_delete].get("FotoId")
+        if foto_id:
+            try:
+                get_user_drive_service().files().delete(fileId=foto_id).execute()
+            except Exception:
+                pass  # foto zelf verwijderen is best-effort, het record verdwijnt sowieso
+
     # Blad volledig herbouwen i.p.v. de rij ter plekke te verwijderen: openpyxl schuift
     # afbeelding-ankers niet automatisch mee bij het verwijderen van rijen, dit voorkomt
     # dat foto's na een verwijdering bij de verkeerde rij terechtkomen.
@@ -204,7 +318,7 @@ def delete_location(file_id: str, index_to_delete: int) -> None:
     for idx, record in enumerate(records):
         if idx == index_to_delete:
             continue
-        new_ws.append([record[col] for col in COLUMNS])
+        new_ws.append([record.get(col, "") for col in COLUMNS])
         photo = photos_by_index.get(idx)
         if photo:
             _embed_photo(new_ws, new_ws.max_row, photo)
@@ -328,6 +442,9 @@ if foto_ruw:
 
 with st.form("nieuwe_locatie", clear_on_submit=True):
     naam = st.text_input("Naam")
+    type_locatie = st.selectbox(
+        "Type", LOCATION_TYPES, format_func=lambda t: f"{TYPE_ICONS[t]} {t}"
+    )
     notities = st.text_area("Notities (optioneel)")
     datum = st.date_input("Datum", value=date.today())
 
@@ -340,6 +457,7 @@ with st.form("nieuwe_locatie", clear_on_submit=True):
             row = {
                 "Datum": datum,
                 "Naam": naam,
+                "Type": type_locatie,
                 "Notities": notities,
                 "Latitude": st.session_state.lat,
                 "Longitude": st.session_state.lon,
@@ -384,7 +502,10 @@ else:
         for _, r in gefilterd_geo.iterrows():
             folium.Marker(
                 [r["Latitude"], r["Longitude"]],
-                popup=f"{r['Naam']} ({r['Datum']})",
+                popup=f"{type_icon(r['Type'])} {r['Naam']} ({r['Datum']})",
+                icon=folium.DivIcon(
+                    html=f'<div style="font-size: 24px; transform: translate(-50%, -50%);">{type_icon(r["Type"])}</div>'
+                ),
             ).add_to(overview_map)
         st_folium(overview_map, height=350, use_container_width=True, key="overview_map")
 
@@ -392,15 +513,22 @@ else:
         with st.container(border=True):
             cols = st.columns([1, 2])
             with cols[0]:
-                if idx in row_photos:
+                foto_id = r.get("FotoId")
+                if foto_id:
+                    foto_data = fetch_drive_photo_bytes(foto_id)
+                    if foto_data:
+                        st.image(foto_data)
+                elif idx in row_photos:
                     st.image(row_photos[idx])
             with cols[1]:
-                st.markdown(f"**{r['Naam']}** — {r['Datum']}")
+                st.markdown(f"**{type_icon(r['Type'])} {r['Naam']}** — {r['Datum']}")
                 if r.get("Notities"):
                     st.write(r["Notities"])
                 if pd.notna(r["Latitude"]) and pd.notna(r["Longitude"]):
                     maps_url = f"https://www.google.com/maps?q={r['Latitude']},{r['Longitude']}"
                     st.markdown(f"[📍 Open in Google Maps]({maps_url})")
+                if r.get("FotoLink"):
+                    st.markdown(f"[🖼️ Open foto in Drive]({r['FotoLink']})")
 
                 confirm_key = f"confirm_delete_{idx}"
                 if st.session_state.get(confirm_key):
