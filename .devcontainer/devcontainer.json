@@ -5,8 +5,8 @@
   "customizations": {
     "codespaces": {
       "openFiles": [
-        "locaties/README.md",
-        "locaties/app.py"
+        "leuke-locaties/README.md",
+        "leuke-locaties/app.py"
       ]
     },
     "vscode": {
@@ -17,9 +17,9 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; pip3 install --user -r locaties/requirements.txt; pip3 install --user -r plants/requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; pip3 install --user -r leuke-locaties/requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
-    "server": "streamlit run locaties/app.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "streamlit run leuke-locaties/app.py --server.enableCORS false --server.enableXsrfProtection false"
   },
   "portsAttributes": {
     "8501": {

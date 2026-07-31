@@ -1,17 +1,12 @@
-# streamlit
+# leuke-locaties
 
-This repo hosts multiple independent Streamlit apps, one per subfolder. Each app has its own `requirements.txt`, `runtime.txt`, and `.streamlit/` config, so they can be deployed separately on Streamlit Community Cloud by pointing the app's "Main file path" at the right subfolder (e.g. `locaties/app.py`).
-
-## Apps
-
-- [`locaties/`](locaties/) — Uitgaven doorheen het jaar (expense/location tracking app).
-- [`plants/`](plants/) — Compare plant species prices across webshops and physical plant centers.
+A Streamlit app for tracking and mapping your favorite places — restaurants, sights,
+museums, places to stay, walks, ... — with notes and photos. See
+[`leuke-locaties/README.md`](leuke-locaties/README.md) for details.
 
 ## Local development
 
-Each app is run from its own folder, e.g.:
-
 ```
-pip install -r locaties/requirements.txt
-streamlit run locaties/app.py
+pip install -r leuke-locaties/requirements.txt
+streamlit run leuke-locaties/app.py
 ```
